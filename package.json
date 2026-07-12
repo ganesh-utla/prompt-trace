@@ -3,7 +3,7 @@
   "displayName": "PromptTrace",
   "description": "Trace code changes back to the prompt that produced them — diff per prompt, prompt timeline, and prompt blame for coding agents.",
   "version": "0.0.1",
-  "publisher": "prompttrace",
+  "publisher": "ganeshutla",
   "license": "MIT",
   "engines": {
     "vscode": "^1.80.0",
