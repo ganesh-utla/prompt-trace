@@ -7,3 +7,11 @@ docs/**
 PLAN.md
 **/*.map
 .gitignore
+
+# Local runtime + test artifacts — must never ship in the .vsix
+.claude/**
+.prompt-trace/**
+scripts/**
+demo/**
+hello.html
+*.vsix

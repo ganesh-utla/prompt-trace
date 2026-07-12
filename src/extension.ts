@@ -150,7 +150,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   context.subscriptions.push(
     vscode.commands.registerCommand("prompttrace.installHooks", () =>
-      ensureHooks(context, workspacePath, settings.autoInstallHooks)
+      ensureHooks(context, workspacePath, settings.autoInstallHooks, repo)
     )
   );
   context.subscriptions.push(
@@ -207,7 +207,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   // Hook install: auto if setting on, else prompt once.
-  await ensureHooks(context, workspacePath, settings.autoInstallHooks);
+  await ensureHooks(context, workspacePath, settings.autoInstallHooks, repo);
 
   // Refresh the trees when the workspace files change (so new prompts surface).
   context.subscriptions.push(
@@ -269,7 +269,8 @@ export function deactivate(): void {
 async function ensureHooks(
   context: vscode.ExtensionContext,
   workspacePath: string,
-  autoInstall: boolean
+  autoInstall: boolean,
+  repo: Repository
 ): Promise<void> {
   const cliPath = cliPathFor(context.extensionPath);
   if (await hooksInstalled(workspacePath, cliPath)) {
@@ -293,6 +294,19 @@ async function ensureHooks(
     const { file } = await installHooks(workspacePath, cliPath);
     vscode.window.showInformationMessage(`PromptTrace: hooks installed (${file}).`);
     await setHooksInstalledContext(true);
+
+    // Fresh install with no prior baseline: seed it now from the current
+    // workspace state so the user's next prompt is attributed to that prompt
+    // rather than being consumed to establish the baseline. Skip when a
+    // baseline already exists (re-install / cliPath change) to preserve any
+    // in-flight drift — re-baselining in that case stays a manual Reindex.
+    if (repo.getLastState().size === 0) {
+      vscode.window.setStatusBarMessage("PromptTrace: establishing baseline…", 10_000);
+      const n = await reindexBaseline(repo, workspacePath);
+      vscode.window.showInformationMessage(
+        `PromptTrace: baseline established from ${n} file(s) — ready to trace your next prompt.`
+      );
+    }
   } catch (err) {
     log.error(`hook install failed: ${err}`);
     vscode.window.showErrorMessage(`PromptTrace: could not install hooks: ${err}`);
@@ -383,12 +397,12 @@ async function compact(repo: Repository): Promise<void> {
 }
 
 /**
- * Manual `Reindex` command: full re-baseline. Absorbs all on-disk drift
- * (manual edits, branch switch, downtime) into the cursor so the next prompt
- * isn't blamed for it. Reads fresh settings; reloads the store first to pick up
- * any CLI writes. History (prompts / file_changes) is untouched.
+ * Core full re-baseline: snapshot the workspace and reset the cursor to it.
+ * Returns the number of files whose content was written (new + modified).
+ * Reads fresh settings and reloads the store first to pick up any CLI writes.
+ * History (prompts / file_changes) is untouched.
  */
-async function runFullReindex(repo: Repository, workspacePath: string): Promise<void> {
+async function reindexBaseline(repo: Repository, workspacePath: string): Promise<number> {
   const settings = readSettings();
   const prev = currentState(repo);
   const { entries } = await snapshotWorkspace({
@@ -399,8 +413,18 @@ async function runFullReindex(repo: Repository, workspacePath: string): Promise<
   const { newCursor, needContent } = planFullReindex(prev, entries);
   const contents = await readContents(workspacePath, needContent);
   repo.reindex(newCursor, contents);
+  return needContent.length;
+}
+
+/**
+ * Manual `Reindex` command: full re-baseline. Absorbs all on-disk drift
+ * (manual edits, branch switch, downtime) into the cursor so the next prompt
+ * isn't blamed for it. History (prompts / file_changes) is untouched.
+ */
+async function runFullReindex(repo: Repository, workspacePath: string): Promise<void> {
+  const n = await reindexBaseline(repo, workspacePath);
   vscode.window.showInformationMessage(
-    `PromptTrace: reindexed — cursor re-baselined; ${needContent.length} file(s) had uncaptured changes that will no longer be attributed to the next prompt.`
+    `PromptTrace: reindexed — cursor re-baselined; ${n} file(s) had uncaptured changes that will no longer be attributed to the next prompt.`
   );
 }
 

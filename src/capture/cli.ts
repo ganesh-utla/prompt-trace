@@ -132,11 +132,14 @@ async function handleStop(
   });
 
   const prev = repo.getLastState();
-  const hadBaseline = prev.size > 0 || repo.countPrompts() > 0;
 
-  if (!hadBaseline) {
-    // First Stop ever: establish the baseline. Write blobs for every file so
-    // the next prompt's diff has real before-content to compare against.
+  if (prev.size === 0) {
+    // No cursor yet: establish the baseline. Write blobs for every file so the
+    // next prompt's diff has real before-content to compare against. This
+    // fires on the first Stop ever (and after Clear All), regardless of
+    // whether a prompt is already pending — a pending UserPromptSubmit does
+    // NOT constitute a baseline, so we must seed rather than diff against an
+    // empty cursor (which would mark every file as added).
     const baselineContents = new Map<string, Buffer>();
     for (const e of entries) {
       try {
