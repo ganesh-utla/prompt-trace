@@ -1,0 +1,232 @@
+{
+  "name": "prompt-trace",
+  "displayName": "PromptTrace",
+  "description": "Trace code changes back to the prompt that produced them — diff per prompt, prompt timeline, and prompt blame for coding agents.",
+  "version": "0.0.1",
+  "publisher": "prompttrace",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0",
+    "node": ">=18"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "main": "./dist/extension.js",
+  "icon": "media/icon.png",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "prompttrace",
+          "title": "PromptTrace",
+          "icon": "media/activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "prompttrace": [
+        {
+          "id": "prompttrace.promptsView",
+          "name": "Prompts",
+          "icon": "media/activitybar.svg"
+        },
+        {
+          "id": "prompttrace.timelineView",
+          "name": "Timeline",
+          "icon": "media/activitybar.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "prompttrace.refresh",
+        "title": "PromptTrace: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "prompttrace.openDiff",
+        "title": "PromptTrace: Open Diff",
+        "icon": "$(compare-changes)"
+      },
+      {
+        "command": "prompttrace.installHooks",
+        "title": "PromptTrace: Install Claude Code Hooks",
+        "enablement": "!prompttrace.hooksInstalled"
+      },
+      {
+        "command": "prompttrace.clearAll",
+        "title": "PromptTrace: Clear All Tracing"
+      },
+      {
+        "command": "prompttrace.clearOlderThan",
+        "title": "PromptTrace: Clear Older Than…"
+      },
+      {
+        "command": "prompttrace.clearCurrentSession",
+        "title": "PromptTrace: Clear Current Session"
+      },
+      {
+        "command": "prompttrace.compact",
+        "title": "PromptTrace: Compact Storage"
+      },
+      {
+        "command": "prompttrace.reindex",
+        "title": "PromptTrace: Reindex / Re-baseline"
+      },
+      {
+        "command": "prompttrace.toggleBlame",
+        "title": "PromptTrace: Toggle Prompt Blame",
+        "icon": "$(git-commit)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "prompttrace.refresh",
+          "when": "view == prompttrace.promptsView",
+          "group": "navigation"
+        },
+        {
+          "command": "prompttrace.refresh",
+          "when": "view == prompttrace.timelineView",
+          "group": "navigation"
+        },
+        {
+          "command": "prompttrace.installHooks",
+          "when": "view == prompttrace.promptsView && !prompttrace.hooksInstalled",
+          "group": "navigation"
+        },
+        {
+          "command": "prompttrace.clearCurrentSession",
+          "when": "view == prompttrace.promptsView",
+          "group": "9_management@1"
+        },
+        {
+          "command": "prompttrace.clearOlderThan",
+          "when": "view == prompttrace.promptsView",
+          "group": "9_management@2"
+        },
+        {
+          "command": "prompttrace.reindex",
+          "when": "view == prompttrace.promptsView",
+          "group": "9_management@3"
+        },
+        {
+          "command": "prompttrace.compact",
+          "when": "view == prompttrace.promptsView",
+          "group": "9_management@4"
+        },
+        {
+          "command": "prompttrace.clearAll",
+          "when": "view == prompttrace.promptsView",
+          "group": "9_management@5"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "prompttrace.openDiff",
+          "when": "view == prompttrace.promptsView && viewItem == fileChange",
+          "group": "inline"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "prompttrace.toggleBlame",
+          "when": "prompttrace.blameOn == false && activeEditor",
+          "group": "navigation"
+        },
+        {
+          "command": "prompttrace.toggleBlame",
+          "when": "prompttrace.blameOn == true && activeEditor",
+          "alt": "command",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "PromptTrace",
+      "properties": {
+        "prompttrace.excludePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/node_modules/**",
+            "**/.git/**",
+            "**/dist/**",
+            "**/build/**",
+            "**/*.min.js",
+            "**/*.map",
+            "**/pnpm-lock.yaml",
+            "**/package-lock.json",
+            "**/yarn.lock"
+          ],
+          "description": "Glob patterns to exclude from prompt tracing (never snapshotted)."
+        },
+        "prompttrace.storageLocation": {
+          "type": "string",
+          "enum": [
+            "workspace",
+            "global"
+          ],
+          "enumDescriptions": [
+            "Store tracing under <workspace>/.prompt-trace/ (phase 1 default).",
+            "Store under ~/.prompt-trace/<hash>/ keyed by workspace path (phase 2)."
+          ],
+          "default": "workspace",
+          "description": "Where prompt-trace storage lives."
+        },
+        "prompttrace.retention.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically prune old prompts on activation."
+        },
+        "prompttrace.retention.keepLastPrompts": {
+          "type": "number",
+          "default": 1000,
+          "description": "When retention is on, keep at least this many most-recent prompts."
+        },
+        "prompttrace.retention.keepLastDays": {
+          "type": "number",
+          "default": 90,
+          "description": "When retention is on, also keep prompts newer than this many days."
+        },
+        "prompttrace.maxFileSizeKB": {
+          "type": "number",
+          "default": 1024,
+          "description": "Skip content snapshot for files larger than this (KB); store metadata only."
+        },
+        "prompttrace.autoInstallHooks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prompt to install Claude Code hooks on first activation."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs --production",
+    "watch": "node esbuild.config.mjs --watch",
+    "package": "vsce package",
+    "compile": "tsc -p ./",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "diff": "^5.2.0",
+    "sql.js": "^1.14.1"
+  },
+  "devDependencies": {
+    "@types/diff": "^5.2.2",
+    "@types/node": "^20.14.0",
+    "@types/sql.js": "^1.4.11",
+    "@types/vscode": "^1.80.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  }
+}
