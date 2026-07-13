@@ -108,12 +108,24 @@ function wasmPath(): string {
 
 async function init(): Promise<Awaited<ReturnType<typeof initSqlJs>>> {
   if (!SQL) {
-    if (!fs.existsSync(wasmPath())) {
+    const wasm = wasmPath();
+    if (!fs.existsSync(wasm)) {
       throw new Error(
-        `sql.js WASM not found at ${wasmPath()}. Rebuild the extension so the wasm file is copied to dist/.`
+        `PromptTrace: sql.js WASM not found at ${wasm}. The extension install ` +
+          `may be corrupt — uninstall PromptTrace, reload the window, and reinstall. ` +
+          `(If running from source, rebuild so dist/sql-wasm.wasm is copied.)`
       );
     }
-    SQL = await initSqlJs({ locateFile: () => wasmPath() });
+    try {
+      SQL = await initSqlJs({ locateFile: () => wasm });
+    } catch (err) {
+      throw new Error(
+        `PromptTrace: could not load sql.js WASM from ${wasm}: ${
+          err instanceof Error ? err.message : err
+        }. On macOS, if the file is quarantined, run: ` +
+          `xattr -d com.apple.quarantine "${wasm}"`
+      );
+    }
   }
   return SQL;
 }

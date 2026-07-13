@@ -33,6 +33,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const workspacePath = currentWorkspacePath();
   if (!workspacePath) {
     log.warn("no workspace folder; PromptTrace inactive");
+    registerDegradedCommands(
+      context,
+      "PromptTrace needs a workspace folder open to trace prompts."
+    );
     return;
   }
 
@@ -43,11 +47,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await ensureGitignoreEntry(workspacePath);
 
   // Open the store and persist capture-relevant settings so the hook-launched
-  // CLI (which can't read VS Code config) picks them up from settings_kv.
-  const db = await openStore(storeRoot);
-  activeDb = db;
-  const repo = new Repository(db, storeRoot);
-  persistCaptureSettings(repo, settings);
+  // CLI (which can't read VS Code config) picks them up from settings_kv. A
+  // failure here — most commonly the sql.js WASM failing to load on this
+  // machine — used to abort activation silently before any command was
+  // registered, so VS Code reported a cryptic "command 'prompttrace.X' not
+  // found" on every click. Catch it, surface the real cause, and register
+  // stub commands so the views aren't dead surfaces.
+  let repo: Repository;
+  try {
+    const db = await openStore(storeRoot);
+    activeDb = db;
+    repo = new Repository(db, storeRoot);
+    persistCaptureSettings(repo, settings);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    log.error(`activation failed: ${err}`);
+    const choice = await vscode.window.showErrorMessage(
+      `PromptTrace could not start: ${detail}. See the "PromptTrace" output channel.`,
+      "Show Log"
+    );
+    if (choice === "Show Log") outputChannel.show();
+    registerDegradedCommands(context, `PromptTrace is disabled: ${detail}`);
+    return;
+  }
 
   // Optional retention: prune old prompts on activation (off by default).
   if (settings.retentionEnabled) {
@@ -266,6 +288,44 @@ export function deactivate(): void {
   activeDb?.close();
 }
 
+/** Every command the extension contributes (see package.json `contributes.commands`). */
+const PROMPTTRACE_COMMANDS = [
+  "prompttrace.refresh",
+  "prompttrace.openDiff",
+  "prompttrace.installHooks",
+  "prompttrace.clearAll",
+  "prompttrace.clearOlderThan",
+  "prompttrace.clearCurrentSession",
+  "prompttrace.compact",
+  "prompttrace.reindex",
+  "prompttrace.toggleBlame",
+] as const;
+
+/**
+ * Register no-op stubs for every PromptTrace command. Used when activation
+ * fails (or there's no workspace folder): without these, the views declared in
+ * package.json would invoke commands that were never registered, and VS Code
+ * would show "command 'prompttrace.X' not found". The stubs instead surface
+ * the real reason PromptTrace is disabled and offer a one-click reload to retry
+ * once the user has fixed the cause (reinstall, remove quarantine, open a
+ * workspace, …).
+ */
+function registerDegradedCommands(
+  context: vscode.ExtensionContext,
+  message: string
+): void {
+  for (const id of PROMPTTRACE_COMMANDS) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(id, async () => {
+        const choice = await vscode.window.showErrorMessage(message, "Reload Window");
+        if (choice === "Reload Window") {
+          vscode.commands.executeCommand("workbench.action.reloadWindow");
+        }
+      })
+    );
+  }
+}
+
 async function ensureHooks(
   context: vscode.ExtensionContext,
   workspacePath: string,
@@ -295,17 +355,28 @@ async function ensureHooks(
     vscode.window.showInformationMessage(`PromptTrace: hooks installed (${file}).`);
     await setHooksInstalledContext(true);
 
-    // Fresh install with no prior baseline: seed it now from the current
-    // workspace state so the user's next prompt is attributed to that prompt
-    // rather than being consumed to establish the baseline. Skip when a
-    // baseline already exists (re-install / cliPath change) to preserve any
-    // in-flight drift — re-baselining in that case stays a manual Reindex.
+    // Fresh install with no prior baseline: seed it from the current workspace
+    // state so the user's next prompt is attributed to that prompt rather than
+    // being consumed to establish the baseline. Skip when a baseline already
+    // exists (re-install / cliPath change) to preserve in-flight drift —
+    // re-baselining in that case stays a manual Reindex.
+    //
+    // Run this in the BACKGROUND: it snapshots the whole workspace, which can be
+    // slow on a large/remote tree, and awaiting it blocks activate() — which
+    // leaves the Prompts/Timeline views spinning until it finishes. If the
+    // user's first prompt lands before the baseline is ready, the capture
+    // CLI's Stop handler seeds the baseline itself (prev.size === 0 branch), so
+    // correctness doesn't depend on this completing first; it's an optimization
+    // to make the first prompt attributable.
     if (repo.getLastState().size === 0) {
       vscode.window.setStatusBarMessage("PromptTrace: establishing baseline…", 10_000);
-      const n = await reindexBaseline(repo, workspacePath);
-      vscode.window.showInformationMessage(
-        `PromptTrace: baseline established from ${n} file(s) — ready to trace your next prompt.`
-      );
+      reindexBaseline(repo, workspacePath)
+        .then((n) =>
+          vscode.window.showInformationMessage(
+            `PromptTrace: baseline established from ${n} file(s) — ready to trace your next prompt.`
+          )
+        )
+        .catch((err) => log.error(`baseline establishment failed: ${err}`));
     }
   } catch (err) {
     log.error(`hook install failed: ${err}`);

@@ -33,8 +33,12 @@ export async function snapshotWorkspace(opts: SnapshotOptions): Promise<{
     try {
       names = await fs.promises.readdir(dir);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-      log.warn(`snapshot: cannot read dir ${dir}: ${err}`);
+      // ELOOP (self-referential symlink chains, e.g. Nix flake inputs) is
+      // expected on some trees; treat unreadable dirs as "nothing here" rather
+      // than aborting the whole snapshot.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue;
+      if (code !== "ELOOP") log.warn(`snapshot: cannot read dir ${dir}: ${err}`);
       continue;
     }
 
@@ -46,18 +50,25 @@ export async function snapshotWorkspace(opts: SnapshotOptions): Promise<{
 
       if (isExcluded(rel, excludePatterns)) continue;
 
+      // lstat, NOT stat: we deliberately do not follow symlinks. Following them
+      // makes the walker descend into symlinked external trees (e.g. a Nix
+      // flake-input symlink to a store path containing a full nixpkgs checkout),
+      // double-count bind mounts, and loop forever on self-referential links
+      // (ELOOP). Skipping symlinks entirely keeps the snapshot bounded to
+      // files physically inside the workspace.
       let stat: fs.Stats;
       try {
-        stat = await fs.promises.stat(abs);
+        stat = await fs.promises.lstat(abs);
       } catch {
         continue;
       }
 
+      if (stat.isSymbolicLink()) continue;
       if (stat.isDirectory()) {
         stack.push(abs);
         continue;
       }
-      if (!stat.isFile()) continue; // skip symlinks, sockets, etc.
+      if (!stat.isFile()) continue; // sockets, FIFOs, devices, …
 
       if (stat.size > maxFileSizeBytes) {
         largeSkipped.push(rel);

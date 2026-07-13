@@ -93,6 +93,14 @@ async function main(): Promise<void> {
   }
 
   db.close();
+
+  // We've consumed stdin (or timed out). If the hook runner keeps the stdin
+  // pipe open after sending the payload — Claude Code's Stop hook does — the
+  // still-attached listeners keep Node's event loop alive and the process
+  // never exits, so Claude Code shows the hook as "running" until its own
+  // timeout. Destroy stdin and exit explicitly so completion always signals.
+  process.stdin.destroy();
+  process.exit(0);
 }
 
 async function handleUserPromptSubmit(
@@ -196,5 +204,6 @@ async function readFileSafe(absPath: string): Promise<Buffer> {
 main().catch((err) => {
   log.error(`capture CLI failed: ${err?.stack ?? err}`);
   // Hooks must not block the agent — exit 0 regardless of capture failure.
+  process.stdin.destroy();
   process.exit(0);
 });
