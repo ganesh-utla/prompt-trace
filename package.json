@@ -2,7 +2,7 @@
   "name": "prompt-trace",
   "displayName": "PromptTrace",
   "description": "Trace code changes back to the prompt that produced them — diff per prompt, prompt timeline, and prompt blame for coding agents.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "ganeshutla",
   "license": "MIT",
   "engines": {
