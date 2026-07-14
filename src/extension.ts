@@ -20,6 +20,7 @@ import { PromptTreeProvider } from "./views/promptsView";
 import { TimelineTreeProvider } from "./views/timelineView";
 import { DiffContentProvider } from "./views/diffContentProvider";
 import { toWorkspaceRel } from "./util/workspace";
+import { DB_FILE_NAME } from "./util/paths";
 
 let activeDb: DB | null = null;
 
@@ -82,7 +83,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   // Diff content provider (serves before/after snapshots to vscode.diff).
-  const diffProvider = new DiffContentProvider(storeRoot);
+  const diffProvider = new DiffContentProvider(storeRoot, workspacePath);
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider("prompttrace", diffProvider)
   );
@@ -139,8 +140,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push({ dispose: () => blameDecorator.dispose() });
 
   // Auto-reload the tree when the CLI (or another process) writes the store.
+  // Watch the store's own db file (absolute) so this works in both storage
+  // modes: global (~/.prompt-trace/<project>-<hash>/db.sqlite, outside the
+  // workspace) and workspace (<workspace>/.prompt-trace/db.sqlite).
   const dbWatcher = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(workspacePath, ".prompt-trace/db.sqlite")
+    new vscode.RelativePattern(storeRoot, DB_FILE_NAME)
   );
   dbWatcher.onDidChange(() => {
     repo.reload();
@@ -156,6 +160,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       setTimelineFile(editor);
       applyBlame(editor);
+      updateDiffOpenContext(editor);
     })
   );
 
@@ -177,7 +182,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   context.subscriptions.push(
     vscode.commands.registerCommand("prompttrace.openDiff", (arg) =>
-      openDiff(arg, diffProvider)
+      openDiff(arg, diffProvider).then(() =>
+        updateDiffOpenContext(vscode.window.activeTextEditor)
+      )
+    )
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("prompttrace.openCurrentFile", () =>
+      openCurrentFile()
     )
   );
   context.subscriptions.push(
@@ -292,6 +304,7 @@ export function deactivate(): void {
 const PROMPTTRACE_COMMANDS = [
   "prompttrace.refresh",
   "prompttrace.openDiff",
+  "prompttrace.openCurrentFile",
   "prompttrace.installHooks",
   "prompttrace.clearAll",
   "prompttrace.clearOlderThan",
@@ -403,6 +416,45 @@ async function openDiff(arg: unknown, diffProvider: DiffContentProvider): Promis
   const node = arg as { path?: string; beforeHash?: string | null; afterHash?: string | null; promptTitle?: string };
   if (!node?.path) return;
   await diffProvider.openDiff(node.path, node.beforeHash ?? null, node.afterHash ?? null, node.promptTitle ?? "");
+}
+
+/**
+ * Set the `prompttrace.diffOpen` context key so the editor-title "open current
+ * file" icon shows only on prompttrace diff editors (active editor's document
+ * is one of our virtual before/after URIs).
+ */
+function updateDiffOpenContext(editor: vscode.TextEditor | undefined): void {
+  const isDiff = !!editor && editor.document.uri.scheme === "prompttrace";
+  vscode.commands.executeCommand("setContext", "prompttrace.diffOpen", isDiff);
+}
+
+/**
+ * "Checkout to current file": from a prompttrace diff editor, open the real
+ * workspace file (its final/current on-disk state) in a normal editor — the
+ * same view you'd get by clicking the file in the Explorer. The absolute path
+ * is carried in the diff URI's file= query (see DiffContentProvider.openDiff).
+ */
+async function openCurrentFile(): Promise<void> {
+  const uri = vscode.window.activeTextEditor?.document.uri;
+  if (!uri || uri.scheme !== "prompttrace") return;
+  const params = new URLSearchParams(uri.query);
+  const absPath = params.get("file");
+  if (!absPath) {
+    vscode.window.showWarningMessage("PromptTrace: no file path attached to this diff.");
+    return;
+  }
+  if (!fs.existsSync(absPath)) {
+    vscode.window.showWarningMessage(
+      "PromptTrace: " + absPath + " no longer exists on disk."
+    );
+    return;
+  }
+  try {
+    await vscode.window.showTextDocument(vscode.Uri.file(absPath), { preview: true });
+  } catch (err) {
+    log.error("openCurrentFile failed: " + err);
+    vscode.window.showErrorMessage("PromptTrace: could not open file: " + err);
+  }
 }
 
 async function clearAll(repo: Repository, tree: PromptTreeProvider): Promise<void> {

@@ -69,7 +69,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const location = (process.env.PROMPTTRACE_STORAGE ?? "workspace") as "workspace" | "global";
+  const location = (process.env.PROMPTTRACE_STORAGE ?? "global") as "workspace" | "global";
   const storeRoot = resolveStoreRoot(cwd, location);
   const db = await openStore(storeRoot);
   const repo = new Repository(db, storeRoot);
@@ -80,6 +80,8 @@ async function main(): Promise<void> {
     "**/node_modules/**",
     "**/.git/**",
     "**/dist/**",
+    "**/.hie/**",
+    "**/dist-newstyle/**",
   ]);
   const maxFileSizeBytes =
     Number(repo.getSetting("maxFileSizeBytes") ?? 1024 * 1024);

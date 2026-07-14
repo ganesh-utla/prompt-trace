@@ -65,6 +65,11 @@ export async function snapshotWorkspace(opts: SnapshotOptions): Promise<{
 
       if (stat.isSymbolicLink()) continue;
       if (stat.isDirectory()) {
+        // Prune whole excluded directories (node_modules, dist-newstyle, .hie)
+        // instead of descending: a dir/** pattern matches the trailing-slash
+        // form dir/ (its regex ends in .*), while file patterns (*.min.js)
+        // never match a dir/ form, so there is no false pruning.
+        if (isExcluded(rel + "/", excludePatterns)) continue;
         stack.push(abs);
         continue;
       }

@@ -1,6 +1,6 @@
 import * as path from "path";
 
-/** Workspace-relative path of the trace store (phase 1: in-workspace). */
+/** Directory name for the trace store (under the workspace in `workspace` mode). */
 export const STORE_DIR_NAME = ".prompt-trace";
 export const DB_FILE_NAME = "db.sqlite";
 export const BLOBS_DIR_NAME = "blobs";

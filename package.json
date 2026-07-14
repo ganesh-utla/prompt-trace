@@ -2,7 +2,7 @@
   "name": "prompt-trace",
   "displayName": "PromptTrace",
   "description": "Trace code changes back to the prompt that produced them — diff per prompt, prompt timeline, and prompt blame for coding agents.",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "ganeshutla",
   "license": "MIT",
   "engines": {
@@ -52,6 +52,11 @@
         "command": "prompttrace.openDiff",
         "title": "PromptTrace: Open Diff",
         "icon": "$(compare-changes)"
+      },
+      {
+        "command": "prompttrace.openCurrentFile",
+        "title": "PromptTrace: Open Current File",
+        "icon": "$(go-to-file)"
       },
       {
         "command": "prompttrace.installHooks",
@@ -145,6 +150,11 @@
           "when": "prompttrace.blameOn == true && activeEditor",
           "alt": "command",
           "group": "navigation"
+        },
+        {
+          "command": "prompttrace.openCurrentFile",
+          "when": "prompttrace.diffOpen",
+          "group": "navigation"
         }
       ]
     },
@@ -165,6 +175,8 @@
             "**/.venv/**",
             "**/venv/**",
             "**/.next/**",
+            "**/.hie/**",
+            "**/dist-newstyle/**",
             "**/*.min.js",
             "**/*.map",
             "**/pnpm-lock.yaml",
@@ -180,10 +192,10 @@
             "global"
           ],
           "enumDescriptions": [
-            "Store tracing under <workspace>/.prompt-trace/ (phase 1 default).",
-            "Store under ~/.prompt-trace/<hash>/ keyed by workspace path (phase 2)."
+            "Store tracing under <workspace>/.prompt-trace/ (visible in the project folder).",
+            "Store under ~/.prompt-trace/<project>-<hash>/ keyed by workspace path (default; keeps the project folder clean)."
           ],
-          "default": "workspace",
+          "default": "global",
           "description": "Where prompt-trace storage lives."
         },
         "prompttrace.retention.enabled": {
