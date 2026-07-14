@@ -7,7 +7,6 @@ import { openStore } from "./store/db";
 import type { DB } from "./store/db";
 import { Repository } from "./store/repository";
 import type { PathHash } from "./store/repository";
-import { ensureGitignoreEntry } from "./util/gitignore";
 import { readSettings } from "./settings";
 import { cliPathFor } from "./hooks/hookConfig";
 import { installHooks, hooksInstalled } from "./hooks/installer";
@@ -44,8 +43,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const settings = readSettings();
   const storeRoot = resolveStoreRoot(workspacePath, settings.storageLocation);
   log.info(`store root: ${storeRoot}`);
-
-  await ensureGitignoreEntry(workspacePath);
 
   // Open the store and persist capture-relevant settings so the hook-launched
   // CLI (which can't read VS Code config) picks them up from settings_kv. A
@@ -188,8 +185,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     )
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand("prompttrace.openCurrentFile", () =>
-      openCurrentFile()
+    vscode.commands.registerCommand("prompttrace.openCurrentFile", (arg) =>
+      openCurrentFile(arg, workspacePath)
     )
   );
   context.subscriptions.push(
@@ -346,7 +343,7 @@ async function ensureHooks(
   repo: Repository
 ): Promise<void> {
   const cliPath = cliPathFor(context.extensionPath);
-  if (await hooksInstalled(workspacePath, cliPath)) {
+  if (await hooksInstalled(cliPath)) {
     log.info("hooks already installed and up to date");
     await setHooksInstalledContext(true);
     return;
@@ -429,12 +426,30 @@ function updateDiffOpenContext(editor: vscode.TextEditor | undefined): void {
 }
 
 /**
- * "Checkout to current file": from a prompttrace diff editor, open the real
- * workspace file (its final/current on-disk state) in a normal editor — the
- * same view you'd get by clicking the file in the Explorer. The absolute path
- * is carried in the diff URI's file= query (see DiffContentProvider.openDiff).
+ * "Open current file" from either of two entry points, both serving the same
+ * purpose: open the real workspace file (its current on-disk state) in a
+ * normal editor — the same view you'd get by clicking the file in the
+ * Explorer (live, editable).
+ *
+ * - Tree node (Prompts/Timeline `view/item/context`): `arg` is the clicked
+ *   element. The Prompts view's file node carries `path` (workspace-relative);
+ *   the Timeline view's node carries `relPath`. We resolve either against
+ *   `workspacePath`.
+ * - Diff editor title bar (`editor/title`, gated by `prompttrace.diffOpen`):
+ *   `arg` is undefined, so we fall back to the active prompttrace diff editor
+ *   and read the absolute path from its `file=` query (set by
+ *   DiffContentProvider.openDiff).
  */
-async function openCurrentFile(): Promise<void> {
+async function openCurrentFile(arg: unknown, workspacePath: string): Promise<void> {
+  // Tree invocation: clicked node carries a workspace-relative path.
+  const relPath = readRelPathFromNode(arg);
+  if (relPath) {
+    const absPath = path.join(workspacePath, relPath);
+    await showWorkspaceFile(absPath);
+    return;
+  }
+
+  // Diff-editor invocation: recover the absolute path from the active diff's URI.
   const uri = vscode.window.activeTextEditor?.document.uri;
   if (!uri || uri.scheme !== "prompttrace") return;
   const params = new URLSearchParams(uri.query);
@@ -443,6 +458,23 @@ async function openCurrentFile(): Promise<void> {
     vscode.window.showWarningMessage("PromptTrace: no file path attached to this diff.");
     return;
   }
+  await showWorkspaceFile(absPath);
+}
+
+/**
+ * Extract a workspace-relative path from a tree-node argument if it carries
+ * one. The Prompts view's file node has `path`; the Timeline view's node has
+ * `relPath`. Returns undefined for the diff-editor invocation (arg undefined)
+ * or a non-file node.
+ */
+function readRelPathFromNode(arg: unknown): string | undefined {
+  if (!arg || typeof arg !== "object") return undefined;
+  const node = arg as { path?: string; relPath?: string };
+  return node.path ?? node.relPath;
+}
+
+/** Open `absPath` in a normal editor (live, editable), warning if it's gone. */
+async function showWorkspaceFile(absPath: string): Promise<void> {
   if (!fs.existsSync(absPath)) {
     vscode.window.showWarningMessage(
       "PromptTrace: " + absPath + " no longer exists on disk."

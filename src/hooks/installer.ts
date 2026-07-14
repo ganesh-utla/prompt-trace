@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { log } from "../util/log";
 import {
@@ -10,22 +11,42 @@ import {
 } from "./hookConfig";
 
 /**
- * Installs/updates PromptTrace hooks into a Claude Code settings file.
+ * Installs/updates PromptTrace hooks into the user-level Claude Code settings
+ * file: ~/.claude/settings.json (the home-dir location, not a per-project file
+ * in the current working directory).
  *
- * We install into `.claude/settings.local.json` (machine-local, conventionally
- * gitignored) rather than the shared `.claude/settings.json`, because the hook
- * command contains an absolute path to this machine's built `dist/cli.js` — it
- * must not be committed. This is a deliberate, documented deviation from the
- * plan (which suggested project `settings.json`); the rationale is that shared
- * settings should stay machine-agnostic.
+ * A single user-level install covers every project on this machine: the hook
+ * command launches the capture CLI, which resolves the per-project store from
+ * its cwd (see resolveStoreRoot), so one hook block traces all projects without
+ * any per-project setup. We use settings.json (the shared user Claude settings)
+ * per request; the hook command does carry an absolute, machine-specific path
+ * to this machine's built dist/cli.js, but the file lives in the home dir and
+ * is only shared across machines if the user explicitly dotfile-syncs it.
+ *
+ * PROMPTTRACE_CLAUDE_HOME (test-only) overrides the home dir so tests target a
+ * temp dir instead of the real ~/.claude/settings.json.
  */
+function claudeSettingsFile(): string {
+  const home = process.env.PROMPTTRACE_CLAUDE_HOME ?? os.homedir();
+  return path.join(home, ".claude", "settings.json");
+}
+
+/**
+ * The LEGACY per-project location a prior version installed hooks into:
+ * <workspace>/.claude/settings.local.json. We strip our hooks out of it on
+ * install/uninstall so an upgrade does not leave duplicates (project-local +
+ * user-level) that would fire the CLI twice per event.
+ */
+function legacySettingsFile(workspacePath: string): string {
+  return path.join(workspacePath, ".claude", "settings.local.json");
+}
+
 export async function installHooks(
   workspacePath: string,
   cliPath: string
 ): Promise<{ installed: boolean; file: string }> {
-  const claudeDir = path.join(workspacePath, ".claude");
-  const settingsFile = path.join(claudeDir, "settings.local.json");
-  await fs.promises.mkdir(claudeDir, { recursive: true });
+  const settingsFile = claudeSettingsFile();
+  await fs.promises.mkdir(path.dirname(settingsFile), { recursive: true });
 
   const settings = await readJsonSafe(settingsFile);
   const command = buildHookCommand(cliPath);
@@ -36,42 +57,30 @@ export async function installHooks(
   }
   settings.hooks = hooks;
 
-  await fs.promises.writeFile(settingsFile, JSON.stringify(settings, null, 2) + "\n", "utf8");
-  log.info(`hooks installed into ${settingsFile}`);
+  await writeSettingsFile(settingsFile, settings);
+  log.info("hooks installed into " + settingsFile);
+
+  // Clean up any hooks a prior version left in the legacy project-local file so
+  // they don't double-fire alongside this user-level install.
+  await removeOurHooksFromFile(legacySettingsFile(workspacePath));
+
   return { installed: true, file: settingsFile };
 }
 
-/** Remove our hooks from the settings file. */
+/** Remove our hooks from the user-level settings file (and the legacy location). */
 export async function uninstallHooks(
   workspacePath: string
 ): Promise<{ removed: boolean; file: string }> {
-  const settingsFile = path.join(workspacePath, ".claude", "settings.local.json");
-  const settings = await readJsonSafe(settingsFile);
-  const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
-  let removed = false;
-  for (const event of HOOK_EVENTS) {
-    const list = hooks[event];
-    if (Array.isArray(list)) {
-      const filtered = list.filter((e) => !isOurHook(e));
-      if (filtered.length !== list.length) removed = true;
-      if (filtered.length) hooks[event] = filtered;
-      else delete hooks[event];
-    }
-  }
-  if (Object.keys(hooks).length) settings.hooks = hooks;
-  else delete settings.hooks;
-
-  await fs.promises.writeFile(settingsFile, JSON.stringify(settings, null, 2) + "\n", "utf8");
-  log.info(`hooks removed from ${settingsFile} (changed=${removed})`);
+  const settingsFile = claudeSettingsFile();
+  const removed = await removeOurHooksFromFile(settingsFile);
+  // Also clean the legacy project-local location if it still holds our hooks.
+  await removeOurHooksFromFile(legacySettingsFile(workspacePath));
   return { removed, file: settingsFile };
 }
 
 /** True if our hooks are present and point at `cliPath`. */
-export async function hooksInstalled(
-  workspacePath: string,
-  cliPath: string
-): Promise<boolean> {
-  const settingsFile = path.join(workspacePath, ".claude", "settings.local.json");
+export async function hooksInstalled(cliPath: string): Promise<boolean> {
+  const settingsFile = claudeSettingsFile();
   const settings = await readJsonSafe(settingsFile);
   const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
   const expected = buildHookCommand(cliPath);
@@ -86,6 +95,37 @@ export async function hooksInstalled(
     if (!cmd || cmd.command !== expected) return false;
   }
   return true;
+}
+
+/**
+ * Strip our hook entries from a single settings file, preserving unrelated
+ * hooks. Returns true if anything was removed. No-op if the file is absent
+ * or holds none of our hooks.
+ */
+async function removeOurHooksFromFile(file: string): Promise<boolean> {
+  const settings = await readJsonSafe(file);
+  const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
+  let removed = false;
+  for (const event of HOOK_EVENTS) {
+    const list = hooks[event];
+    if (Array.isArray(list)) {
+      const filtered = list.filter((e) => !isOurHook(e));
+      if (filtered.length !== list.length) removed = true;
+      if (filtered.length) hooks[event] = filtered;
+      else delete hooks[event];
+    }
+  }
+  if (!removed) return false;
+  if (Object.keys(hooks).length) settings.hooks = hooks;
+  else delete settings.hooks;
+  await writeSettingsFile(file, settings);
+  log.info("hooks removed from " + file);
+  return true;
+}
+
+/** Write a settings object back as pretty JSON with a trailing newline. */
+async function writeSettingsFile(file: string, settings: Record<string, unknown>): Promise<void> {
+  await fs.promises.writeFile(file, JSON.stringify(settings, null, 2) + "\n", "utf8");
 }
 
 function upsertEvent(

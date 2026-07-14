@@ -15,12 +15,14 @@ function assert(cond: boolean, msg: string): void {
 
 async function main(): Promise<void> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pt-hooks-"));
+  // Isolate from the real ~/.claude/settings.json: install into <tmp>/.claude/.
+  process.env.PROMPTTRACE_CLAUDE_HOME = tmp;
   const cliPath = path.join(tmp, "ext", "dist", "cli.js");
   fs.mkdirSync(path.dirname(cliPath), { recursive: true });
   fs.writeFileSync(cliPath, "// stub");
 
-  // Pre-existing user hook in settings.local.json that must be preserved.
-  const settingsFile = path.join(tmp, ".claude", "settings.local.json");
+  // Pre-existing user hook in settings.json that must be preserved.
+  const settingsFile = path.join(tmp, ".claude", "settings.json");
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   fs.writeFileSync(
     settingsFile,
@@ -54,8 +56,8 @@ async function main(): Promise<void> {
   const userHook = stopHooks.find((e) => e.hooks.some((h) => h.command.includes("user stop")));
   assert(!!userHook, "user's Stop hook preserved");
 
-  assert(await hooksInstalled(tmp, cliPath), "hooksInstalled reports true after install");
-  assert(!(await hooksInstalled(tmp, cliPath + "x")), "hooksInstalled false for wrong path");
+  assert(await hooksInstalled(cliPath), "hooksInstalled reports true after install");
+  assert(!(await hooksInstalled(cliPath + "x")), "hooksInstalled false for wrong path");
 
   // Idempotent re-install: should not duplicate our hook.
   await installHooks(tmp, cliPath);
@@ -73,7 +75,7 @@ async function main(): Promise<void> {
   const oursCmd = stop3.find((e) => e.hooks.some((h) => h.command.includes(HOOK_MARKER)))!
     .hooks[0].command;
   assert(oursCmd.includes("ext2"), "our hook command updated to new cliPath");
-  assert(await hooksInstalled(tmp, cliPath2), "hooksInstalled true for new path");
+  assert(await hooksInstalled(cliPath2), "hooksInstalled true for new path");
 
   // Uninstall: removes ours, keeps user's.
   await uninstallHooks(tmp);

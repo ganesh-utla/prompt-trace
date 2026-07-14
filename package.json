@@ -2,7 +2,7 @@
   "name": "prompt-trace",
   "displayName": "PromptTrace",
   "description": "Trace code changes back to the prompt that produced them — diff per prompt, prompt timeline, and prompt blame for coding agents.",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "ganeshutla",
   "license": "MIT",
   "engines": {
@@ -137,6 +137,16 @@
           "command": "prompttrace.openDiff",
           "when": "view == prompttrace.promptsView && viewItem == fileChange",
           "group": "inline"
+        },
+        {
+          "command": "prompttrace.openCurrentFile",
+          "when": "viewItem == fileChange",
+          "group": "inline"
+        },
+        {
+          "command": "prompttrace.openCurrentFile",
+          "when": "viewItem == fileChange",
+          "group": "prompttrace@1"
         }
       ],
       "editor/title": [
